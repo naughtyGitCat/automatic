@@ -86,6 +86,18 @@ else
     exit 1
 fi
 
+if [[ ! -d "/content/automatic/models/Stable-diffusion" ]]
+then
+  mkdir -p /content/automatic/models/Stable-diffusion
+fi
+
+if [[ ! -f "/content/automatic/models/Stable-diffusion/majicmixRealistic_v4.safetensors" ]]
+then
+  wget https://civitai.com/api/download/models/55911 -O /content/automatic/models/Stable-diffusion/majicmixRealistic_v4.safetensors
+fi
+
+
+
 if [[ ! -z "${ACCELERATE}" ]] && [ ${ACCELERATE}="True" ] && [ -x "$(command -v accelerate)" ]
 then
     echo "Accelerating launch.py..."
