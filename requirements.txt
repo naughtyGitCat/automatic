@@ -1,3 +1,4 @@
+xformers
 addict
 aenum
 aiohttp
