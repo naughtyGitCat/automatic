@@ -65,7 +65,7 @@ do
     fi
 done
 
-if ! "${venv_cmd}" -h &>/dev/null
+if "${venv_cmd}" -h &>/dev/null
 then
     echo "Error: virtualenv is not installed"
     exit 1
