@@ -29,6 +29,11 @@ then
     export GIT="git"
 fi
 
+if [[ -z "${venv_cmd}" ]]
+then
+    venv_bin="virtualvenv"
+fi
+
 if [[ -z "${venv_dir}" ]]
 then
     venv_dir="venv"
@@ -60,16 +65,16 @@ do
     fi
 done
 
-if ! "${python_cmd}" -c "import venv" &>/dev/null
+if ! "${venv_cmd}" -h &>/dev/null
 then
-    echo "Error: python3-venv is not installed"
+    echo "Error: virtualenv is not installed"
     exit 1
 fi
 
 echo "Create and activate python venv"
 if [[ ! -d "${venv_dir}" ]]
 then
-    "${python_cmd}" -m venv "${venv_dir}"
+   "${venv_cmd}" "${venv_dir}"
     first_launch=1
 fi
 
