@@ -31,7 +31,7 @@ fi
 
 if [[ -z "${venv_cmd}" ]]
 then
-    venv_bin="virtualvenv"
+    venv_bin="virtualenv"
 fi
 
 if [[ -z "${venv_dir}" ]]
