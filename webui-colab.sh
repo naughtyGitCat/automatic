@@ -31,7 +31,7 @@ fi
 
 if [[ -z "${venv_cmd}" ]]
 then
-    venv_bin="virtualenv"
+    venv_cmd="virtualenv"
 fi
 
 if [[ -z "${venv_dir}" ]]
@@ -65,7 +65,7 @@ do
     fi
 done
 
-if "${venv_cmd}" -h &>/dev/null
+if ! "${venv_cmd}" -h &>/dev/null
 then
     echo "Error: virtualenv is not installed"
     exit 1
