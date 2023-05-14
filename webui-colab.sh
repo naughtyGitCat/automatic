@@ -86,6 +86,14 @@ else
     exit 1
 fi
 
+if [[ ! -d "/content/ImageReward/" ]]
+then
+  source "${venv_dir}"/bin/activate
+  git clone https://github.com/THUDM/ImageReward.git
+  %cd /content/ImageReward
+  pip install image-reward
+fi
+
 if [[ ! -d "/content/automatic/models/Stable-diffusion" ]]
 then
   mkdir -p /content/automatic/models/Stable-diffusion
