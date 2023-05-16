@@ -538,7 +538,6 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
         assert len(p.prompt) > 0
     else:
         assert p.prompt is not None
-    # devices.torch_gc() # TODO: gc
     seed = get_fixed_seed(p.seed)
     subseed = get_fixed_seed(p.subseed)
     modules.sd_hijack.model_hijack.apply_circular(p.tiling)
@@ -604,6 +603,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             if state.skipped:
                 state.skipped = False
             if state.interrupted:
+                shared.log.debug(f'Process interrupted: {n}/{p.n_iter}')
                 break
             prompts = p.all_prompts[n * p.batch_size:(n + 1) * p.batch_size]
             negative_prompts = p.all_negative_prompts[n * p.batch_size:(n + 1) * p.batch_size]
@@ -848,14 +848,12 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             for i in range(samples.shape[0]):
                 save_intermediate(samples, i)
             samples = torch.nn.functional.interpolate(samples, size=(target_height // opt_f, target_width // opt_f), mode=latent_scale_mode["mode"], antialias=latent_scale_mode["antialias"])
-            # Avoid making the inpainting conditioning unless necessary as
-            # this does need some extra compute to decode / encode the image again.
             if getattr(self, "inpainting_mask_weight", shared.opts.inpainting_mask_weight) < 1.0:
-                image_conditioning = self.img2img_image_conditioning(decode_first_stage(self.sd_model, samples), samples)
+                image_conditioning = self.img2img_image_conditioning(decode_first_stage(self.sd_model, samples.to(dtype=devices.dtype_vae)), samples)
             else:
-                image_conditioning = self.txt2img_image_conditioning(samples)
+                image_conditioning = self.txt2img_image_conditioning(samples.to(dtype=devices.dtype_vae))
         else:
-            decoded_samples = decode_first_stage(self.sd_model, samples)
+            decoded_samples = decode_first_stage(self.sd_model, samples.to(dtype=devices.dtype_vae))
             lowres_samples = torch.clamp((decoded_samples + 1.0) / 2.0, min=0.0, max=1.0)
             batch_images = []
             for i, x_sample in enumerate(lowres_samples):

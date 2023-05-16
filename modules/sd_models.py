@@ -141,18 +141,20 @@ def model_hash(filename):
         with open(filename, "rb") as file:
             import hashlib
             m = hashlib.sha256()
-
             file.seek(0x100000)
             m.update(file.read(0x10000))
             return m.hexdigest()[0:8]
     except FileNotFoundError:
         return 'NOFILE'
+    except:
+        return 'NOHASH'
 
 
 def select_checkpoint():
     model_checkpoint = shared.opts.sd_model_checkpoint
     checkpoint_info = checkpoint_aliases.get(model_checkpoint, None)
     if checkpoint_info is not None or shared.cmd_opts.ckpt is not None:
+        shared.log.debug(f'Select checkpoint: {checkpoint_info.title if checkpoint_info is not None else None}')
         return checkpoint_info
     if len(checkpoints_list) == 0:
         shared.log.error("Cannot run without a checkpoint")
@@ -162,6 +164,7 @@ def select_checkpoint():
     if model_checkpoint is not None:
         shared.log.warning(f"Default checkpoint not found: {model_checkpoint}")
         shared.log.warning(f"Loading fallback checkpoint: {checkpoint_info.title}")
+    shared.log.debug(f'Select checkpoint: {checkpoint_info.title if checkpoint_info is not None else None}')
     return checkpoint_info
 
 
@@ -248,6 +251,7 @@ def get_checkpoint_state_dict(checkpoint_info: CheckpointInfo, timer):
 
 
 def load_model_weights(model: torch.nn.Module, checkpoint_info: CheckpointInfo, state_dict, timer):
+    shared.log.debug(f'Model weights loading: {memory_stats()}')
     sd_model_hash = checkpoint_info.calculate_shorthash()
     timer.record("hash")
     shared.opts.data["sd_model_checkpoint"] = checkpoint_info.title

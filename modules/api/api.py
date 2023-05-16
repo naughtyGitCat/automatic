@@ -182,7 +182,6 @@ class Api:
         script_args = default_script_args.copy()
         # position 0 in script_arg is the idx+1 of the selectable script that is going to be run when using scripts.scripts_*2img.run()
         if selectable_scripts:
-            # TODO this can corrupt values for other scripts
             script_args[selectable_scripts.args_from:selectable_scripts.args_to] = request.script_args
             script_args[0] = selectable_script_idx + 1
         # Now check for always on scripts
@@ -194,7 +193,6 @@ class Api:
                 if not alwayson_script.alwayson:
                     raise HTTPException(status_code=422, detail=f"Selectable script cannot be in always on params: {alwayson_script_name}")
                 if "args" in request.alwayson_scripts[alwayson_script_name]:
-                    # TODO this can corrupt values for other scripts
                     # min between arg length in scriptrunner and arg length in the request
                     for idx in range(0, min((alwayson_script.args_to - alwayson_script.args_from), len(request.alwayson_scripts[alwayson_script_name]["args"]))):
                         script_args[alwayson_script.args_from + idx] = request.alwayson_scripts[alwayson_script_name]["args"][idx]
@@ -398,13 +396,15 @@ class Api:
                 options.update({k: shared.opts.data.get(k, shared.opts.data_labels.get(k).default)})
             else:
                 options.update({k: shared.opts.data.get(k, None)})
-
+        if 'sd_lyco' in options:
+            del options['sd_lyco']
+        if 'sd_lora' in options:
+            del options['sd_lora']
         return options
 
     def set_config(self, req: Dict[str, Any]):
         for k, v in req.items():
             shared.opts.set(k, v)
-
         shared.opts.save(shared.config_filename)
         return
 
@@ -573,7 +573,7 @@ class Api:
             ram = { 'error': f'{err}' }
         try:
             import torch
-            if shared.cmd_opts.use_ipex():
+            if shared.cmd_opts.use_ipex:
                 system = { 'free': (torch.xpu.get_device_properties("xpu").total_memory - torch.xpu.memory_allocated()), 'used': torch.xpu.memory_allocated(), 'total': torch.xpu.get_device_properties("xpu").total_memory }
                 s = dict(torch.xpu.memory_stats("xpu"))
                 allocated = { 'current': s['allocated_bytes.all.current'], 'peak': s['allocated_bytes.all.peak'] }

@@ -164,7 +164,7 @@ def update(folder):
         branch = 'master'
     else:
         branch = branch.split('\n')[0].replace('*', '').strip()
-    log.debug(f'Setting branch: {folder} / {branch}')
+    # log.debug(f'Setting branch: {folder} / {branch}')
     git(f'checkout {branch}', folder)
     if branch is None:
         git('pull --autostash --rebase --force', folder)
@@ -217,15 +217,18 @@ def check_torch():
     allow_directml = not (args.use_cuda or args.use_rocm or args.use_ipex)
     log.debug(f'Torch overrides: cuda={args.use_cuda} rocm={args.use_rocm} ipex={args.use_ipex} diml={args.use_directml}')
     log.debug(f'Torch allowed: cuda={allow_cuda} rocm={allow_rocm} ipex={allow_ipex} diml={allow_directml}')
-    if allow_cuda and (shutil.which('nvidia-smi') is not None or os.path.exists(os.path.join(os.environ.get('SystemRoot') or r'C:\Windows', 'System32', 'nvidia-smi.exe'))):
+    torch_command = os.environ.get('TORCH_COMMAND', '')
+    if torch_command != '':
+        pass
+    elif allow_cuda and (shutil.which('nvidia-smi') is not None or os.path.exists(os.path.join(os.environ.get('SystemRoot') or r'C:\Windows', 'System32', 'nvidia-smi.exe'))):
         log.info('nVidia CUDA toolkit detected')
-        torch_command = os.environ.get('TORCH_COMMAND', 'torch torchaudio torchvision==0.15.1 --index-url https://download.pytorch.org/whl/cu118')
+        torch_command = os.environ.get('TORCH_COMMAND', 'torch torchvision --index-url https://download.pytorch.org/whl/cu118')
         xformers_package = os.environ.get('XFORMERS_PACKAGE', 'xformers==0.0.17' if opts.get('cross_attention_optimization', '') == 'xFormers' else 'none')
-    elif allow_rocm and (shutil.which('rocminfo') is not None or os.path.exists('/opt/rocm/bin/rocminfo')):
+    elif allow_rocm and (shutil.which('rocminfo') is not None or os.path.exists('/opt/rocm/bin/rocminfo') or os.path.exists('/dev/kfd')):
         log.info('AMD ROCm toolkit detected')
         os.environ.setdefault('HSA_OVERRIDE_GFX_VERSION', '10.3.0')
         os.environ.setdefault('PYTORCH_HIP_ALLOC_CONF', 'garbage_collection_threshold:0.9,max_split_size_mb:512')
-        torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.0.0 torchvision==0.15.1 torchaudio --index-url https://download.pytorch.org/whl/rocm5.4.2')
+        torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.0.0 torchvision==0.15.1 --index-url https://download.pytorch.org/whl/rocm5.4.2')
         xformers_package = os.environ.get('XFORMERS_PACKAGE', 'none')
     elif allow_ipex and (shutil.which('sycl-ls') is not None or os.path.exists('/opt/intel/oneapi') or args.use_ipex):
         log.info('Intel OneAPI Toolkit detected')
@@ -235,28 +238,30 @@ def check_torch():
         machine = platform.machine()
         if allow_directml and ('arm' not in machine and 'aarch' not in machine and args.use_directml):
             log.info('Using DirectML Backend')
-            torch_command = os.environ.get('TORCH_COMMAND', 'torch==2.0.0 torchvision==0.15.1 torch-directml')
+            torch_command = os.environ.get('TORCH_COMMAND', 'torch-directml')
             xformers_package = os.environ.get('XFORMERS_PACKAGE', 'none')
+            if 'torch' in torch_command and not args.version:
+                install(torch_command, 'torch torchvision')
         else:
             log.info('Using CPU-only Torch')
-            torch_command = os.environ.get('TORCH_COMMAND', 'torch torchaudio torchvision==0.15.1')
+            torch_command = os.environ.get('TORCH_COMMAND', 'torch torchvision==0.15.1')
             xformers_package = os.environ.get('XFORMERS_PACKAGE', 'none')
     if 'torch' in torch_command and not args.version:
-        install(torch_command, 'torch torchvision torchaudio')
+        install(torch_command, 'torch torchvision')
     if args.skip_torch:
         log.info('Skipping Torch tests')
     else:
         try:
             import torch
             log.info(f'Torch {torch.__version__}')
-            if args.use_ipex:
+            if args.use_ipex and allow_ipex:
                 import intel_extension_for_pytorch as ipex # pylint: disable=import-error, unused-import
                 log.info(f'Torch backend: Intel OneAPI {torch.__version__}')
                 log.info(f'Torch detected GPU: {torch.xpu.get_device_name("xpu")} VRAM {round(torch.xpu.get_device_properties("xpu").total_memory / 1024 / 1024)}')
-            elif torch.cuda.is_available():
-                if torch.version.cuda:
+            elif torch.cuda.is_available() and (allow_cuda or allow_rocm):
+                if torch.version.cuda and allow_cuda:
                     log.info(f'Torch backend: nVidia CUDA {torch.version.cuda} cuDNN {torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else "N/A"}')
-                elif torch.version.hip:
+                elif torch.version.hip and allow_rocm:
                     log.info(f'Torch backend: AMD ROCm HIP {torch.version.hip}')
                 else:
                     log.warning('Unknown Torch backend')
@@ -264,12 +269,13 @@ def check_torch():
                     log.info(f'Torch detected GPU: {torch.cuda.get_device_name(device)} VRAM {round(torch.cuda.get_device_properties(device).total_memory / 1024 / 1024)} Arch {torch.cuda.get_device_capability(device)} Cores {torch.cuda.get_device_properties(device).multi_processor_count}')
             else:
                 try:
-                    import torch_directml # pylint: disable=import-error
-                    import pkg_resources
-                    version = pkg_resources.get_distribution("torch-directml")
-                    log.info(f'Torch backend: DirectML ({version})')
-                    for i in range(0, torch_directml.device_count()):
-                        log.info(f'Torch detected GPU: {torch_directml.device_name(i)}')
+                    if args.use_directml and allow_directml:
+                        import torch_directml # pylint: disable=import-error
+                        import pkg_resources
+                        version = pkg_resources.get_distribution("torch-directml")
+                        log.info(f'Torch backend: DirectML ({version})')
+                        for i in range(0, torch_directml.device_count()):
+                            log.info(f'Torch detected GPU: {torch_directml.device_name(i)}')
                 except:
                     log.warning("Torch reports CUDA not available")
         except Exception as e:
@@ -399,11 +405,12 @@ def install_submodules():
         git('fetch --all')
         git('reset --hard origin/master')
         git('checkout master')
+        txt = git('submodule')
         log.info('Continuing setup')
-    txt = git('submodule --quiet update --init --recursive')
+    git('submodule --quiet update --init --recursive')
     if not args.skip_update:
         log.info('Updating submodules')
-        submodules = git('submodule').splitlines()
+        submodules = txt.splitlines()
         for submodule in submodules:
             try:
                 name = submodule.split()[1].strip()
@@ -480,7 +487,7 @@ def check_version(offline=False, reset=True): # pylint: disable=unused-argument
         log.error('Not a git repository')
         if not args.ignore:
             exit(1)
-    _status = git('status')
+    # status = git('status')
     # if 'branch' not in status:
     #    log.error('Cannot get git repository status')
     #    exit(1)
@@ -501,6 +508,7 @@ def check_version(offline=False, reset=True): # pylint: disable=unused-argument
             if args.upgrade:
                 global quick_allowed # pylint: disable=global-statement
                 quick_allowed = False
+                log.info('Updating main repository')
                 try:
                     git('add .')
                     git('stash')
@@ -561,6 +569,8 @@ def check_timestamp():
     if setup_time < extension_time:
         ok = False
     log.debug(f'Timestamps: version:{version_time} setup:{setup_time} extension:{extension_time}')
+    if args.reinstall:
+        ok = False
     return ok
 
 
@@ -569,11 +579,10 @@ def add_args():
     group.add_argument('--debug', default = False, action='store_true', help = "Run installer with debug logging, default: %(default)s")
     group.add_argument('--reset', default = False, action='store_true', help = "Reset main repository to latest version, default: %(default)s")
     group.add_argument('--upgrade', default = False, action='store_true', help = "Upgrade main repository to latest version, default: %(default)s")
-    group.add_argument("--use-ipex", action='store_true', help="Use Intel OneAPI XPU backend, default: %(default)s", default=False)
+    group.add_argument("--use-ipex", default = False, action='store_true', help="Use Intel OneAPI XPU backend, default: %(default)s")
     group.add_argument('--use-directml', default = False, action='store_true', help = "Use DirectML if no compatible GPU is detected, default: %(default)s")
-    group.add_argument("--use-cuda", action='store_true', help="Force use nVidia CUDA backend, default: %(default)s", default=False)
-    group.add_argument("--use-rocm", action='store_true', help="Force use AMD ROCm backend, default: %(default)s", default=False)
-    group.add_argument('--use-directml', default = False, action='store_true', help = "Use DirectML if no compatible GPU is detected, default: %(default)s")
+    group.add_argument("--use-cuda", default=False, action='store_true', help="Force use nVidia CUDA backend, default: %(default)s")
+    group.add_argument("--use-rocm", default=False, action='store_true', help="Force use AMD ROCm backend, default: %(default)s")
     group.add_argument('--skip-update', default = False, action='store_true', help = "Skip update of extensions and submodules, default: %(default)s")
     group.add_argument('--skip-requirements', default = False, action='store_true', help = "Skips checking and installing requirements, default: %(default)s")
     group.add_argument('--skip-extensions', default = False, action='store_true', help = "Skips running individual extension installers, default: %(default)s")
@@ -642,12 +651,12 @@ def run_setup():
         log.info('Forcing reinstall of all packages')
     check_torch()
     install_requirements()
+    install_packages()
     if check_timestamp():
         log.info('No changes detected: Quick launch active')
         return
     log.info("Running setup")
     log.debug(f"Args: {vars(args)}")
-    install_packages()
     install_repositories()
     install_submodules()
     install_extensions()
@@ -655,7 +664,7 @@ def run_setup():
     if errors == 0:
         log.debug(f'Setup complete without errors: {round(time.time())}')
     else:
-        log.warning(f'Setup complete with errors ({errors})')
+        log.warning(f'Setup complete with errors: {errors}')
         log.warning('See log file for more details: setup.log')
 
 

@@ -7,7 +7,8 @@ parser._optionals = parser.add_argument_group('Other options') # pylint: disable
 group = parser.add_argument_group('Server options')
 
 # main server args
-group.add_argument("--config", type=str, default=os.path.join(data_path, 'config.json'), help="Use specific configuration file, default: %(default)s")
+group.add_argument("--config", type=str, default=os.path.join(data_path, 'config.json'), help="Use specific server configuration file, default: %(default)s")
+group.add_argument("--ui-config", type=str, default=os.path.join(data_path, 'ui-config.json'), help="Use specific UI configuration file, default: %(default)s")
 group.add_argument("--medvram", action='store_true', help="Split model stages and keep only active part in VRAM, default: %(default)s")
 group.add_argument("--lowvram", action='store_true', help="Split model components and keep only active part in VRAM, default: %(default)s")
 group.add_argument("--ckpt", type=str, default=None, help="Path to model checkpoint to load immediately, default: %(default)s")
@@ -38,7 +39,10 @@ group.add_argument("--no-download", action='store_true', help="Disable download 
 group.add_argument("--profile", action='store_true', help="Run profiler, default: %(default)s")
 group.add_argument("--disable-queue", action='store_true', help="Disable queues, default: %(default)s")
 group.add_argument('--debug', default = False, action='store_true', help = "Run installer with debug logging, default: %(default)s")
-group.add_argument("--use-ipex", action='store_true', help="Use Intel OneAPI XPU backend, default: %(default)s", default=False)
+group.add_argument("--use-ipex", default = False, action='store_true', help="Use Intel OneAPI XPU backend, default: %(default)s")
+group.add_argument('--use-directml', default = False, action='store_true', help = "Use DirectML if no compatible GPU is detected, default: %(default)s")
+group.add_argument("--use-cuda", default=False, action='store_true', help="Force use nVidia CUDA backend, default: %(default)s")
+group.add_argument("--use-rocm", default=False, action='store_true', help="Force use AMD ROCm backend, default: %(default)s")
 
 # removed args are added here as hidden in fixed format for compatbility reasons
 group.add_argument("-f", action='store_true', help=argparse.SUPPRESS)  # allows running as root; implemented outside of webui
@@ -82,6 +86,7 @@ def compatibility_args(opts, args):
     group.add_argument("--sub-quad-chunk-threshold", help=argparse.SUPPRESS, default=opts.sub_quad_chunk_threshold)
     group.add_argument("--lora-dir", help=argparse.SUPPRESS, default=opts.lora_dir)
     group.add_argument("--lyco-dir", help=argparse.SUPPRESS, default=opts.lyco_dir)
+    group.add_argument("--enable-console-prompts", help=argparse.SUPPRESS, default=False)
 
     # removed opts are added here with fixed values for compatibility reasons
     opts.use_old_emphasis_implementation = False
@@ -102,5 +107,4 @@ def compatibility_args(opts, args):
     opts.dimensions_and_batch_together = True
 
     args = parser.parse_args()
-
     return args

@@ -14,6 +14,8 @@ from modules import sd_hijack, sd_models, script_callbacks, ui_extensions, deepb
 from modules.ui_components import FormRow, FormColumn, FormGroup, ToolButton, FormHTML # pylint: disable=unused-import
 from modules.paths import script_path, data_path
 from modules.shared import opts, cmd_opts
+from modules.sd_samplers import samplers, samplers_for_img2img
+from modules import prompt_parser
 import modules.codeformer_model
 import modules.generation_parameters_copypaste as parameters_copypaste
 import modules.gfpgan_model
@@ -22,13 +24,9 @@ import modules.scripts
 import modules.shared as shared
 import modules.errors as errors
 import modules.styles
-import modules.textual_inversion.ui
-from modules import prompt_parser
-from modules.sd_hijack import model_hijack
-from modules.sd_samplers import samplers, samplers_for_img2img
-from modules.textual_inversion import textual_inversion
-from modules.generation_parameters_copypaste import image_from_url_text
 import modules.extras
+import modules.textual_inversion.ui
+from modules.textual_inversion import textual_inversion
 
 errors.install()
 mimetypes.init()
@@ -67,7 +65,8 @@ def plaintext_to_html(text):
 def send_gradio_gallery_to_image(x):
     if len(x) == 0:
         return None
-    return image_from_url_text(x[0])
+    return parameters_copypaste.image_from_url_text(x[0])
+
 
 def visit(x, func, path=""):
     if hasattr(x, 'children'):
@@ -208,7 +207,7 @@ def update_token_counter(text, steps):
         prompt_schedules = [[[steps, text]]]
     flat_prompts = reduce(lambda list1, list2: list1+list2, prompt_schedules)
     prompts = [prompt_text for step, prompt_text in flat_prompts]
-    token_count, max_length = max([model_hijack.get_prompt_lengths(prompt) for prompt in prompts], key=lambda args: args[0])
+    token_count, max_length = max([sd_hijack.model_hijack.get_prompt_lengths(prompt) for prompt in prompts], key=lambda args: args[0])
     return f"<span class='gr-box gr-text-input'>{token_count}/{max_length}</span>"
 
 
@@ -460,7 +459,7 @@ def create_ui():
             res_switch_btn.click(lambda w, h: (h, w), inputs=[width, height], outputs=[width, height], show_progress=False)
 
             txt_prompt_img.change(
-                fn=modules.images.image_data,
+                fn=modules.images.image_data, # TODO
                 inputs=[
                     txt_prompt_img
                 ],
@@ -503,9 +502,7 @@ def create_ui():
                 *modules.scripts.scripts_txt2img.infotext_fields
             ]
             parameters_copypaste.add_paste_fields("txt2img", None, txt2img_paste_fields, override_settings)
-            parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(
-                paste_button=txt2img_paste, tabname="txt2img", source_text_component=txt2img_prompt, source_image_component=None,
-            ))
+            parameters_copypaste.register_paste_params_button(parameters_copypaste.ParamBinding(paste_button=txt2img_paste, tabname="txt2img", source_text_component=txt2img_prompt, source_image_component=None))
 
             txt2img_preview_params = [
                 txt2img_prompt,
@@ -736,7 +733,7 @@ def create_ui():
             connect_reuse_seed(subseed, reuse_subseed, generation_info, dummy_component, is_subseed=True)
 
             img2img_prompt_img.change(
-                fn=modules.images.image_data,
+                fn=modules.images.image_data, # TODO
                 inputs=[
                     img2img_prompt_img
                 ],
@@ -1304,7 +1301,9 @@ def create_ui():
                 changed.append(key)
         try:
             opts.save(shared.config_filename)
+            shared.log.info(f'Settings changed: {len(changed)} {changed}')
         except RuntimeError:
+            shared.log.error(f'Settings change failed: {len(changed)} {changed}')
             return opts.dumpjson(), f'{len(changed)} Settings changed without save: {", ".join(changed)}'
         return opts.dumpjson(), f'{len(changed)} Settings changed{": " if len(changed) > 0 else ""}{", ".join(changed)}'
 
@@ -1314,17 +1313,19 @@ def create_ui():
         if not opts.set(key, value):
             return gr.update(value=getattr(opts, key)), opts.dumpjson()
         opts.save(shared.config_filename)
+        shared.log.debug(f'Setting changed: key={key}, value={value}')
         return get_value_for_setting(key), opts.dumpjson()
 
     with gr.Blocks(analytics_enabled=False) as settings_interface:
         with gr.Row():
             settings_submit = gr.Button(value="Apply settings", variant='primary', elem_id="settings_submit")
+            defaults_submit = gr.Button(value="Restore defaults", variant='primary', elem_id="defaults_submit")
             restart_submit = gr.Button(value="Restart server", variant='primary', elem_id="restart_submit")
             shutdown_submit = gr.Button(value="Shutdown server", variant='primary', elem_id="shutdown_submit")
             preview_theme = gr.Button(value="Preview theme", variant='primary', elem_id="settings_preview_theme")
             unload_sd_model = gr.Button(value='Unload checkpoint', variant='primary', elem_id="sett_unload_sd_model")
             reload_sd_model = gr.Button(value='Reload checkpoint', variant='primary', elem_id="sett_reload_sd_model")
-            reload_script_bodies = gr.Button(value='Reload scripts', variant='primary', elem_id="settings_reload_script_bodies")
+            # reload_script_bodies = gr.Button(value='Reload scripts', variant='primary', elem_id="settings_reload_script_bodies")
 
         result = gr.HTML(elem_id="settings_result")
 
@@ -1391,6 +1392,7 @@ def create_ui():
             _js='function(){}'
         )
 
+        """
         def reload_scripts():
             modules.scripts.reload_script_body_only()
             reload_javascript()  # need to refresh the html page
@@ -1400,6 +1402,7 @@ def create_ui():
             inputs=[],
             outputs=[]
         )
+        """
 
         preview_theme.click(
             fn=None,
@@ -1450,6 +1453,7 @@ def create_ui():
             inputs=components,
             outputs=[text_settings, result],
         )
+        defaults_submit.click(fn=lambda x: shared.restore_defaults(restart=True), _js="restart_reload")
         restart_submit.click(fn=lambda x: shared.restart_server(restart=True), _js="restart_reload")
         shutdown_submit.click(fn=lambda x: shared.restart_server(restart=False), _js="restart_reload")
 
@@ -1528,7 +1532,7 @@ def create_ui():
             ]
         )
 
-    ui_config_file = cmd_opts.ui_config_file
+    ui_config_file = cmd_opts.ui_config
     ui_settings = {}
     settings_count = len(ui_settings)
     error_loading = False
@@ -1633,13 +1637,17 @@ def webpath(fn):
 def html_head():
     script_js = os.path.join(script_path, "javascript", "script.js")
     head = f'<script type="text/javascript" src="{webpath(script_js)}"></script>\n'
+    added = []
     for script in modules.scripts.list_scripts("javascript", ".js"):
         if script.path == script_js:
             continue
-        shared.log.debug(f'Loading JS script: {script.path}')
         head += f'<script type="text/javascript" src="{webpath(script.path)}"></script>\n'
+        added.append(script.path)
     for script in modules.scripts.list_scripts("javascript", ".mjs"):
         head += f'<script type="module" src="{webpath(script.path)}"></script>\n'
+        added.append(script.path)
+    added = [a.replace(script_path, '').replace('\\', '/') for a in added]
+    shared.log.debug(f'Adding JS scripts: {added}')
     return head
 
 
@@ -1656,8 +1664,9 @@ def html_body():
 
 
 def html_css():
+    added = []
     def stylesheet(fn):
-        shared.log.debug(f'Adding stylesheet: {fn}')
+        added.append(fn)
         return f'<link rel="stylesheet" property="stylesheet" href="{webpath(fn)}">'
     head = stylesheet('javascript/style.css')
     for cssfile in modules.scripts.list_files_with_name("style.css"):
@@ -1668,6 +1677,8 @@ def html_css():
         head += stylesheet(os.path.join(script_path, "javascript", "black-orange.css"))
     if os.path.exists(os.path.join(data_path, "user.css")):
         head += stylesheet(os.path.join(data_path, "user.css"))
+    added = [a.replace(script_path, '').replace('\\', '/') for a in added]
+    shared.log.debug(f'Adding CSS stylesheets: {added}')
     return head
 
 

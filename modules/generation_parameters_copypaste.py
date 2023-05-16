@@ -6,7 +6,7 @@ import re
 from PIL import Image
 import gradio as gr
 from modules.paths import data_path
-from modules import shared, ui_tempdir, script_callbacks
+from modules import shared, ui_tempdir, script_callbacks, images
 
 re_param_code = r'\s*([\w ]+):\s*("(?:\\"[^,]|\\"|\\|[^\"])+"|[^,]*)(?:,|$)'
 re_param = re.compile(re_param_code)
@@ -36,7 +36,6 @@ def reset():
 def quote(text):
     if ',' not in str(text):
         return text
-
     text = str(text)
     text = text.replace('\\', '\\\\')
     text = text.replace('"', '\\"')
@@ -46,35 +45,40 @@ def quote(text):
 def image_from_url_text(filedata):
     if filedata is None:
         return None
-
     if type(filedata) == list and len(filedata) > 0 and type(filedata[0]) == dict and filedata[0].get("is_file", False):
         filedata = filedata[0]
-
     if type(filedata) == dict and filedata.get("is_file", False):
         filename = filedata["name"]
         is_in_right_dir = ui_tempdir.check_tmp_file(shared.demo, filename)
         if is_in_right_dir:
-            return Image.open(filename)
+            image = Image.open(filename)
+            geninfo, _items = images.read_info_from_image(image)
+            image.info['parameters'] = geninfo
+            return image
         else:
-            shared.log.warning(f'Attempted to open file outside of allowed directories: {filename}')
-
+            shared.log.warning(f'File access denied: {filename}')
+            return None
     if type(filedata) == list:
         if len(filedata) == 0:
             return None
-
         filedata = filedata[0]
-
+    if type(filedata) == dict:
+        shared.log.warning('Incorrect filedata received')
+        return None
     if filedata.startswith("data:image/png;base64,"):
         filedata = filedata[len("data:image/png;base64,"):]
-
+    if filedata.startswith("data:image/webp;base64,"):
+        filedata = filedata[len("data:image/webp;base64,"):]
+    if filedata.startswith("data:image/jpeg;base64,"):
+        filedata = filedata[len("data:image/jpeg;base64,"):]
     filedata = base64.decodebytes(filedata.encode('utf-8'))
     image = Image.open(io.BytesIO(filedata))
+    images.read_info_from_image(image)
     return image
 
 
 def add_paste_fields(tabname, init_img, fields, override_settings_component=None):
     paste_fields[tabname] = {"init_img": init_img, "fields": fields, "override_settings_component": override_settings_component}
-
     # backwards compatibility for existing extensions
     import modules.ui
     if tabname == 'txt2img':

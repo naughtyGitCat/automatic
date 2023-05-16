@@ -16,16 +16,37 @@ import modules.devices as devices
 import modules.paths_internal as paths
 from installer import log as central_logger # pylint: disable=E0611
 
+
 errors.install(gr)
 demo: gr.Blocks = None
 log = central_logger
+progress_print_out = sys.stdout
 parser = cmd_args.parser
 url = 'https://github.com/vladmandic/automatic'
-if os.environ.get('IGNORE_CMD_ARGS_ERRORS', None) is None:
-    cmd_opts = parser.parse_args()
-else:
-    cmd_opts, _ = parser.parse_known_args()
-
+cmd_opts, _ = parser.parse_known_args()
+hide_dirs = {"visible": not cmd_opts.hide_ui_dir_config}
+is_device_dml = False
+xformers_available = False
+sd_model = None
+clip_model = None
+interrogator = modules.interrogate.InterrogateModels("interrogate")
+sd_upscalers = []
+face_restorers = []
+tab_names = []
+options_templates = {}
+hypernetworks = {}
+loaded_hypernetworks = []
+gradio_theme = gr.themes.Base()
+settings_components = None
+latent_upscale_default_mode = "Latent"
+latent_upscale_modes = {
+    "Latent": {"mode": "bilinear", "antialias": False},
+    "Latent (antialiased)": {"mode": "bilinear", "antialias": True},
+    "Latent (bicubic)": {"mode": "bicubic", "antialias": False},
+    "Latent (bicubic antialiased)": {"mode": "bicubic", "antialias": True},
+    "Latent (nearest)": {"mode": "nearest", "antialias": False},
+    "Latent (nearest-exact)": {"mode": "nearest-exact", "antialias": False},
+}
 restricted_opts = {
     "samples_filename_pattern",
     "directories_filename_pattern",
@@ -38,7 +59,6 @@ restricted_opts = {
     "outdir_save",
     "outdir_init_images"
 }
-
 ui_reorder_categories = [
     "inpaint",
     "sampler",
@@ -51,20 +71,6 @@ ui_reorder_categories = [
     "override_settings",
     "scripts",
 ]
-
-cmd_opts.disable_extension_access = (cmd_opts.share or cmd_opts.listen or cmd_opts.server_name) and not cmd_opts.insecure
-devices.device, devices.device_interrogate, devices.device_gfpgan, devices.device_esrgan, devices.device_codeformer = (devices.cpu if any(y in cmd_opts.use_cpu for y in [x, 'all']) else devices.get_optimal_device() for x in ['sd', 'interrogate', 'gfpgan', 'esrgan', 'codeformer'])
-device = devices.device
-is_device_dml = False
-sd_upscalers = []
-sd_model = None
-clip_model = None
-
-
-if device.type == 'privateuseone':
-    import modules.dml # pylint: disable=ungrouped-imports
-    is_device_dml = True
-
 
 def reload_hypernetworks():
     from modules.hypernetworks import hypernetwork
@@ -92,9 +98,11 @@ class State:
     server_start = None
 
     def skip(self):
+        log.debug('Skip requested')
         self.skipped = True
 
     def interrupt(self):
+        log.debug('Interrupt requested')
         self.interrupted = True
 
     def nextjob(self):
@@ -159,11 +167,8 @@ class State:
         self.current_image = image
         self.id_live_preview += 1
 
-
 state = State()
 state.server_start = time.time()
-interrogator = modules.interrogate.InterrogateModels("interrogate")
-face_restorers = []
 
 
 class OptionInfo:
@@ -187,6 +192,8 @@ def list_checkpoint_tiles():
     import modules.sd_models # pylint: disable=W0621
     return modules.sd_models.checkpoint_tiles()
 
+default_checkpoint = list_checkpoint_tiles()[0] if len(list_checkpoint_tiles()) > 0 else "model.ckpt"
+
 
 def refresh_checkpoints():
     import modules.sd_models # pylint: disable=W0621
@@ -206,7 +213,7 @@ def list_themes():
     else:
         res = []
     builtin = ["black-orange", "gradio/default", "gradio/base", "gradio/glass", "gradio/monochrome", "gradio/soft"]
-    themes = sorted(set(builtin + [x['id'] for x in res if x['status'] == 'RUNNING' and 'test' not in x['id'].lower()]))
+    themes = sorted(set(builtin + [x['id'] for x in res if x['status'] == 'RUNNING' and 'test' not in x['id'].lower()]), key=str.casefold)
     return themes
 
 
@@ -222,10 +229,6 @@ def refresh_themes():
     except:
         log.error('Exception refreshing UI themes')
 
-hide_dirs = {"visible": not cmd_opts.hide_ui_dir_config}
-tab_names = []
-options_templates = {}
-default_checkpoint = list_checkpoint_tiles()[0] if len(list_checkpoint_tiles()) > 0 else "model.ckpt"
 
 options_templates.update(options_section(('sd', "Stable Diffusion"), {
     "sd_model_checkpoint": OptionInfo(default_checkpoint, "Stable Diffusion checkpoint", gr.Dropdown, lambda: {"choices": list_checkpoint_tiles()}, refresh=refresh_checkpoints),
@@ -285,6 +288,7 @@ options_templates.update(options_section(('saving-images', "Image options"), {
     "grid_prevent_empty_spots": OptionInfo(True, "Prevent empty spots in grid (when set to autodetect)"),
     "n_rows": OptionInfo(-1, "Grid row count; use -1 for autodetect and 0 for it to be same as batch size", gr.Slider, {"minimum": -1, "maximum": 16, "step": 1}),
     "save_txt": OptionInfo(False, "Create a text file next to every image with generation parameters"),
+    "save_log_fn": OptionInfo("", "Create a log file with image information for each saved image", component_args=hide_dirs),
     "save_images_before_face_restoration": OptionInfo(False, "Save a copy of image before doing face restoration"),
     "save_images_before_highres_fix": OptionInfo(False, "Save a copy of image before applying highres fix"),
     "save_images_before_color_correction": OptionInfo(False, "Save a copy of image before applying color correction to img2img results"),
@@ -330,9 +334,10 @@ options_templates.update(options_section(('cuda', "Compute Settings"), {
     "cuda_allow_tf32": OptionInfo(True, "Allow TF32 math ops"),
     "cuda_allow_tf16_reduced": OptionInfo(True, "Allow TF16 reduced precision math ops"),
     "cuda_compile": OptionInfo(False, "Enable model compile (experimental)"),
-    "cuda_compile_mode": OptionInfo("none", "Model compile mode (experimental)", gr.Radio, lambda: {"choices": ['none', 'inductor', 'cudagraphs', 'aot_ts_nvfuser', 'hidet']}),
-    "cuda_compile_verbose": OptionInfo(True, "Model compile verbose mode"),
+    "cuda_compile_mode": OptionInfo("none", "Model compile mode (experimental)", gr.Radio, lambda: {"choices": ['none', 'inductor', 'cudagraphs', 'aot_ts_nvfuser', 'hidet', 'ipex']}),
+    "cuda_compile_verbose": OptionInfo(False, "Model compile verbose mode"),
     "cuda_compile_errors": OptionInfo(True, "Model compile suppress errors"),
+    "disable_gc": OptionInfo(False, "Disable Torch memory garbage collection (experimental)"),
 }))
 
 options_templates.update(options_section(('upscaling', "Upscaling"), {
@@ -426,6 +431,7 @@ options_templates.update(options_section(('ui', "Live previews"), {
 options_templates.update(options_section(('sampler-params', "Sampler parameters"), {
     "show_samplers": OptionInfo(["Euler a", "UniPC", "DDIM", "DPM++ SDE", "DPM++ SDE", "DPM2 Karras", "DPM++ 2M Karras"], "Show samplers in user interface", gr.CheckboxGroup, lambda: {"choices": [x.name for x in list_samplers() if x.name != "PLMS"]}),
     "fallback_sampler": OptionInfo("Euler a", "Secondary sampler", gr.Dropdown, lambda: {"choices": ["None"] + [x.name for x in list_samplers()]}),
+    "xyz_fallback_sampler": OptionInfo("None", "Force latent upscaler sampler", gr.Dropdown, lambda: {"choices": ["None"] + [x.name for x in list_samplers()]}),
     "eta_ancestral": OptionInfo(1.0, "Noise multiplier for ancestral samplers (eta)", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}),
     "eta_ddim": OptionInfo(0.0, "Noise multiplier for DDIM (eta)", gr.Slider, {"minimum": 0.0, "maximum": 1.0, "step": 0.01}),
     "ddim_discretize": OptionInfo('uniform', "DDIM discretize img2img", gr.Radio, {"choices": ['uniform', 'quad']}),
@@ -577,50 +583,39 @@ class Options:
         """casts an arbitrary to the same type as this setting's value with key
         Example: cast_value("eta_noise_seed_delta", "12") -> returns 12 (an int rather than str)
         """
-
         if value is None:
             return None
-
         default_value = self.data_labels[key].default
         if default_value is None:
             default_value = getattr(self, key, None)
         if default_value is None:
             return None
-
         expected_type = type(default_value)
         if expected_type == bool and value == "False":
             value = False
         else:
             value = expected_type(value)
-
         return value
 
 
 opts = Options()
-batch_cond_uncond = opts.always_batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
-parallel_processing_allowed = not cmd_opts.lowvram and not cmd_opts.medvram
-xformers_available = False
 config_filename = cmd_opts.config
-os.makedirs(opts.hypernetwork_dir, exist_ok=True)
-hypernetworks = {}
-loaded_hypernetworks = []
 if os.path.exists(config_filename):
     opts.load(config_filename)
 cmd_opts = cmd_args.compatibility_args(opts, cmd_opts)
+
+os.makedirs(opts.hypernetwork_dir, exist_ok=True)
 prompt_styles = modules.styles.StyleDatabase(opts.styles_dir)
-settings_components = None
-"""assinged from ui.py, a mapping on setting names to gradio components repsponsible for those settings"""
-latent_upscale_default_mode = "Latent"
-latent_upscale_modes = {
-    "Latent": {"mode": "bilinear", "antialias": False},
-    "Latent (antialiased)": {"mode": "bilinear", "antialias": True},
-    "Latent (bicubic)": {"mode": "bicubic", "antialias": False},
-    "Latent (bicubic antialiased)": {"mode": "bicubic", "antialias": True},
-    "Latent (nearest)": {"mode": "nearest", "antialias": False},
-    "Latent (nearest-exact)": {"mode": "nearest-exact", "antialias": False},
-}
-progress_print_out = sys.stdout
-gradio_theme = gr.themes.Base()
+cmd_opts.disable_extension_access = (cmd_opts.share or cmd_opts.listen or (cmd_opts.server_name or False)) and not cmd_opts.insecure
+devices.device, devices.device_interrogate, devices.device_gfpgan, devices.device_esrgan, devices.device_codeformer = (devices.cpu if any(y in cmd_opts.use_cpu for y in [x, 'all']) else devices.get_optimal_device() for x in ['sd', 'interrogate', 'gfpgan', 'esrgan', 'codeformer'])
+device = devices.device
+batch_cond_uncond = opts.always_batch_cond_uncond or not (cmd_opts.lowvram or cmd_opts.medvram)
+parallel_processing_allowed = not cmd_opts.lowvram and not cmd_opts.medvram
+mem_mon = modules.memmon.MemUsageMonitor("MemMon", device, opts)
+mem_mon.start()
+if device.type == 'privateuseone':
+    import modules.dml # pylint: disable=ungrouped-imports
+    is_device_dml = True
 
 
 def reload_gradio_theme(theme_name=None):
@@ -671,7 +666,6 @@ class TotalTQDM:
             desc="Total",
             total=state.job_count * state.sampling_steps,
             position=1,
-            file=progress_print_out
         )
 
     def update(self):
@@ -694,10 +688,7 @@ class TotalTQDM:
             self._tqdm.close()
             self._tqdm = None
 
-
 total_tqdm = TotalTQDM()
-mem_mon = modules.memmon.MemUsageMonitor("MemMon", device, opts)
-mem_mon.start()
 
 
 def restart_server(restart=True):
@@ -717,6 +708,16 @@ def restart_server(restart=True):
         log.info('Server will restart')
 
 
+def restore_defaults(restart=True):
+    if os.path.exists(cmd_opts.config):
+        log.info('Restoring server defaults')
+        os.remove(cmd_opts.config)
+    if os.path.exists(cmd_opts.ui_config):
+        log.info('Restoring UI defaults')
+        os.remove(cmd_opts.ui_config)
+    restart_server(restart)
+
+
 def listfiles(dirname):
     filenames = [os.path.join(dirname, x) for x in sorted(os.listdir(dirname), key=str.lower) if not x.startswith(".")]
     return [file for file in filenames if os.path.isfile(file)]
@@ -728,9 +729,7 @@ def html_path(filename):
 
 def html(filename):
     path = html_path(filename)
-
     if os.path.exists(path):
         with open(path, encoding="utf8") as file:
             return file.read()
-
     return ""
